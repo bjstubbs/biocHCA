@@ -1,0 +1,224 @@
+---
+title: "Seurat to Single Cell Experiment"
+author: Bioconductor Group at CZI
+date: April 2018
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+# Introduction
+
+The goal is to create a bridge between Seurat and Bioconductor Single Cell Experiment Packages
+
+# Data / Starting Point
+
+The starting point is the Seurat Tutorial
+
+http://satijalab.org/seurat/get_started.html
+
+# First, we make sure we can run the code from the Tutorial: https://www.dropbox.com/s/tn7ql6mjmcubhpt/pbmc3k_tutorial.Rmd?dl=1
+
+## Load libraries
+
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width = 200)
+```
+
+```{r libs}
+library(Seurat)
+library(dplyr)
+```
+
+## Load Data
+
+```{r data}
+pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
+pbmc <- CreateSeuratObject(raw.data = pbmc.data, min.cells = 3, min.genes = 200, project = "10X_PBMC")
+pbmc
+```
+
+## Enrich/Filter/Normalize Data
+
+```{r enrich, cache=TRUE, results="hide"}
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = pbmc@data), value = TRUE)
+percent.mito <- Matrix::colSums(pbmc@raw.data[mito.genes, ]) / Matrix::colSums(pbmc@raw.data)
+pbmc <- AddMetaData(object = pbmc, metadata = percent.mito, col.name = "percent.mito")
+VlnPlot(object = pbmc, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+pbmc <- FilterCells(object = pbmc, subset.names = c("nGene", "percent.mito"), low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+pbmc <- NormalizeData(object = pbmc, normalization.method = "LogNormalize", scale.factor = 1e4)
+pbmc <- FindVariableGenes(object = pbmc, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+pbmc <- ScaleData(object = pbmc, vars.to.regress = c("nUMI", "percent.mito"))
+pbmc <- RunPCA(object = pbmc, pc.genes = pbmc@var.genes, do.print = TRUE, pcs.print = 1:5, genes.print = 5)
+pbmc <- JackStraw(object = pbmc, num.replicate = 100, display.progress = FALSE)
+pbmc <- FindClusters(object = pbmc, reduction.type = "pca", dims.use = 1:10, resolution = 0.6, print.output = 0, save.SNN = TRUE)
+pbmc <- RunTSNE(object = pbmc, dims.use = 1:10)
+pbmc
+
+```
+
+## Verify data
+
+```{r ver1}
+pbmc
+cluster1.markers <- FindMarkers(object = pbmc, ident.1 = 1, min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 5))
+```
+
+# Seurat Class - from Package Manual
+
+## Description
+
+The Seurat object is the center of each single cell analysis. It stores all information associated with
+the dataset, including data, annotations, analyes, etc. All that is needed to construct a Seurat object
+is an expression matrix (rows are genes, columns are cells), which should be log-scale
+
+## Details
+
+Each Seurat object has a number of slots which store information. Key slots to access are listed
+below.
+
+## Slots
+
+* raw.data The raw project data
+* data The normalized expression matrix (log-scale)
+* scale.data scaled (default is z-scoring each gene) expression matrix; used for dimmensional reduction
+* and heatmap visualization
+* var.genes Vector of genes exhibiting high variance across single cells
+* is.expr Expression threshold to determine if a gene is expressed (0 by default)
+* ident THe ’identity class’ for each cell
+* meta.data Contains meta-information about each cell, starting with number of genes detected
+(nGene) and the original identity class (orig.ident); more information is added using AddMetaData
+* project.name Name of hte project (for record keeping)
+* dr List of stored dimmensional reductions; named by technique
+* assay List of additional assays for multimodal analysis; named by technique
+* hvg.info The output of the mean/variability analysis for all genes
+* imputed Matrix of imputed gene scores
+* cell.names Names of all single cells (column names of the expression matrix)
+* cluster.tree List where the first element is a phylo object containing the phylogenetic tree relating
+different identity classes
+* snn Spare matrix object representation of the SNN graph
+* calc.params Named list to store all calculation-related parameter choices
+* kmeans Stores output of gene-based clustering from DoKMeans
+* spatial Stores internal data and calculations for spatial mapping of single cells
+* misc Miscellaneous spot to store any data alongisde the object (for example, gene lists)
+* version Version of package used in object creation
+
+# Single Cell Experiment class - from Manual
+
+## Description
+
+A description of the SingleCellExperiment class for storing single-cell sequencing data.
+
+## Usage
+
+SingleCellExperiment(..., reducedDims=SimpleList())
+
+### S4 method for signature 'SingleCellExperiment'
+
+colData(x, internal=FALSE)
+
+### S4 method for signature 'SingleCellExperiment'
+
+rowData(x, internal=FALSE)
+
+## Arguments
+
+* ... Arguments to pass to the SummarizedExperiment constructor.
+* reducedDims A SimpleList object containing matrices of cell coordinates in reduced space.
+* x A SingleCellExperiment object.
+* internal Whether the information contained in the internal slots should be returned. See
+details.
+
+## Details
+
+The SingleCellExperiment class inherits from the SummarizedExperiment class, with several additional
+slots:
+
+* reducedDims: A SimpleList containing matrices of cell coordinates.
+* int_elementMetadata: A DataFrame containing internal row metadata (for each genomic feature).
+* int_colData: A DataFrame containing internal column metadata (for each cell).
+* int_metadata: A list containing internal experiment metadata.
+* The intended use of this class is the same as that for SummarizedExperiment instances. Rows
+should represent genomic features such as genes, while columns represent samples - in this case,
+single cells. Different quantifications (e.g., counts, CPMs, log-expression) can be stored simultaneously
+in the assays slot. Row and column metadata can be attached using rowData and colData,
+respectively.
+
+The additional reducedDims slot allows storage of results from multiple dimensionality reduction
+methods, e.g., PCA or t-SNE. Each element of the SimpleList should be a matrix of coordinates
+for all cells from one reduction method. The number of rows of each matrix should be equal to the
+number of cells in the SingleCellExperiment object.
+
+The internal metadata slots are not intended for external use. Please use the appropriate getter/setter
+functions instead, such as isSpike or sizeFactors.
+It may sometimes be useful to return both the visible and the internal colData in a single DataFrame.
+This can be achieved by using colData(x, internal=TRUE), which will return the stored colData
+along with the int_colData (currently the sizeFactors). Similarly, rowData(x, internal=TRUE)
+will return the stored rowData along with the int_rowData (currently the columns corresponding
+to isSpike). Warnings will be raised in the unlikely event of any name clashes.
+
+# Translational Grammer: Seurat to Single Cell Experiment
+
+1. raw.data, scale.data, data, imputed, and assay list -> assays
+2. pca, dr, kmeans, hvg.info, meta.data,snn -> reducedDims
+3. var.genes -> reducedDims as a binary to preserve dims?
+4. project.name, is.expr, calc.params -> metadata
+
+# Seurat to Single Cell experiment
+
+```{r map1}
+seurat2BC<-function(myseurat){
+  require(SingleCellExperiment)
+  arrayList=list()
+  if(ncol(myseurat@raw.data)>0&ncol(myseurat@data)>0&ncol(myseurat@data)!=ncol(myseurat@raw.data)){
+    warning("Raw Data is not the same size as Data. Raw Data is truncated")}
+  if(nrow(myseurat@raw.data>0)){arrayList[["raw.data"]]=myseurat@raw.data[,colnames(myseurat@data),]}
+  if(nrow(myseurat@scale.data>0)){arrayList[["scale.data"]]=myseurat@scale.data}
+  if(nrow(myseurat@data>0)){arrayList[["data"]]=myseurat@data}
+  if(nrow(myseurat@imputed>0)){arrayList[["imputed"]]=myseurat@imputed}
+
+reducedList=lapply(myseurat@dr,function(x){x@cell.embeddings})
+
+  sce <- SingleCellExperiment(
+    assays=arrayList,
+    reducedDims = SimpleList(reducedList),
+    metadata=list(
+      project.name=myseurat@project.name,is.expr=myseurat@is.expr,calc.params=myseurat@calc.params )
+  )
+return(sce)
+}
+
+mySC=seurat2BC(pbmc)
+```
+
+# Seurat and SingleCellExperiment
+
+## Seurat
+
+```{r currdat}
+pbmc
+```
+
+## SingleCellExperiment
+
+```{r currdat2}
+mySC
+```
+
+# Caveats
+
+Do we need all of the slots from the dr objects? There are dimension isuses if we do.
+
+```{r cav1}
+str(pbmc@dr[[1]])
+```
+
+# SessionInfo
+
+```{r sess}
+library(devtools)
+session_info()
+```
